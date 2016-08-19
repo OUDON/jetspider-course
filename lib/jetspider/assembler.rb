@@ -110,6 +110,10 @@ module JetSpider
       put_relative_jump 'ifeq', target
     end
 
+    def ifne(target)
+      put_relative_jump 'ifne', target
+    end
+
     def goto(target)
       put_relative_jump 'goto', target
     end
@@ -146,8 +150,8 @@ module JetSpider
       put_insn 'setarg', ObjectFile.uint16(id)
     end
 
-    def getarg(id)
-      put_insn 'getarg', ObjectFile.uint16(id)
+    def getarg(index)
+      put_insn 'getarg', ObjectFile.uint16(index)
     end
 
     def setlocal(id)
@@ -156,6 +160,19 @@ module JetSpider
 
     def getlocal(id)
       put_insn 'getlocal', ObjectFile.uint16(id)
+    end
+
+    # for increment
+    def gnameinc(name)
+      put_insn 'gnameinc', get_atom_id(name)
+    end
+
+    def localinc(id)
+      put_insn 'localinc', ObjectFile.uint16(id)
+    end
+
+    def arginc(id)
+      put_insn 'arginc', ObjectFile.uint16(id)
     end
 
     def new(argc)

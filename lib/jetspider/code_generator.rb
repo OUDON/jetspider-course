@@ -6,6 +6,9 @@ module JetSpider
     def initialize(object_file)
       @object_file = object_file
       @asm = nil
+
+      @loop_break_loc = Array.new
+      @loop_continue_loc= Array.new
     end
 
     def generate_object_file(ast)
@@ -82,7 +85,14 @@ module JetSpider
     #
 
     def visit_FunctionCallNode(n)
-      raise NotImplementedError, 'FunctionCallNode'
+      @asm.callgname n.value.variable.name
+
+      args = n.arguments.value
+      args.each do |arg|
+        visit arg
+      end
+
+      @asm.call args.length
     end
 
     def visit_FunctionDeclNode(n)
@@ -96,7 +106,8 @@ module JetSpider
     def visit_FunctionExprNode(n) raise "FunctionExprNode not implemented"; end
 
     def visit_ReturnNode(n)
-      raise NotImplementedError, 'ReturnNode'
+      visit n.value
+      @asm.return
     end
 
     # These nodes should not be visited directly
@@ -112,9 +123,9 @@ module JetSpider
       var = n.variable
       case
       when var.parameter?
-        raise NotImplementedError, 'ResolveNode - parameter'
+        @asm.getarg var.index
       when var.local?
-        raise NotImplementedError, 'ResolveNode - local'
+        @asm.getlocal var.index
       when var.global?
         @asm.getgname var.name
       else
@@ -123,19 +134,47 @@ module JetSpider
     end
 
     def visit_OpEqualNode(n)
-      raise NotImplementedError, 'OpEqualNode'
+      var = n.left.variable
+      case
+      when var.parameter?
+        visit n.value
+        @asm.setarg var.index
+      when var.local?
+        visit n.value
+        @asm.setlocal var.index
+      when var.global?
+        @asm.bindgname var.name
+        visit n.value
+        @asm.setgname var.name
+      else
+        raise "[FATAL] unsupported variable type for dereference: #{var.inspect}"
+      end
     end
 
     def visit_VarStatementNode(n)
-      raise NotImplementedError, 'VarStatementNode'
+      n.value.each do |val|
+        visit val
+      end
+      @asm.pop
     end
 
     def visit_VarDeclNode(n)
-      raise NotImplementedError, 'VarDeclNode'
+      var = n.variable
+      case
+      when var.local?
+        visit n.value
+        @asm.setlocal var.index
+      when var.global?
+        @asm.bindgname var.name
+        visit n.value
+        @asm.setgname var.name
+      else
+        raise "[FATAL] unsupported variable type for dereference: #{var.inspect}"
+      end
     end
 
     def visit_AssignExprNode(n)
-      raise NotImplementedError, 'AssignExprNode'
+      visit n.value
     end
 
     # We do not support let, const, with
@@ -159,15 +198,49 @@ module JetSpider
     #
 
     def visit_IfNode(n)
-      raise NotImplementedError, 'IfNode'
+      puts "=============="
+      puts n.inspect 
+
+      else_loc = @asm.lazy_location
+      end_if_loc = @asm.lazy_location
+      has_else = !!n.else
+
+      # if 
+      visit n.conditions
+      @asm.ifeq (has_else ? else_loc : end_if_loc)
+
+      # then
+      visit n.value
+      @asm.goto end_if_loc
+
+      # else
+      @asm.fix_location(else_loc)
+      visit n.else
+
+      @asm.fix_location(end_if_loc)
     end
 
     def visit_ConditionalNode(n)
-      raise NotImplementedError, 'ConditinalNode'
+      visit_IfNode n
     end
 
     def visit_WhileNode(n)
-      raise NotImplementedError, 'WhileNode'
+      cmp_loc = @asm.lazy_location
+      @loop_break_loc.push @asm.lazy_location
+
+      @asm.goto cmp_loc
+      loop_start_loc = @asm.location
+      @loop_continue_loc.push loop_start_loc
+      visit n.value
+
+      @asm.fix_location(cmp_loc)
+      visit n.left
+      @asm.ifne loop_start_loc
+
+      @asm.fix_location(@loop_break_loc.last)
+
+      @loop_continue_loc.pop
+      @loop_break_loc.pop
     end
 
     def visit_DoWhileNode(n)
@@ -179,11 +252,11 @@ module JetSpider
     end
 
     def visit_BreakNode(n)
-      raise NotImplementedError, 'BreakNode'
+      @asm.goto @loop_break_loc.last
     end
 
     def visit_ContinueNode(n)
-      raise NotImplementedError, 'ContinueNode'
+      @asm.goto @loop_continue_loc.last
     end
 
     def visit_SwitchNode(n) raise "SwitchNode not implemented"; end
@@ -206,8 +279,28 @@ module JetSpider
       visit n.value
     end
 
+    def optimize_AddNode(n)
+      return n unless n.instance_of?(RKelly::Nodes::AddNode)
+
+      res = RKelly::Nodes::AddNode.new(optimize_AddNode(n.left), optimize_AddNode(n.value))
+      
+      if res.left.instance_of?(RKelly::Nodes::NumberNode) &&
+            res.value.instance_of?(RKelly::Nodes::NumberNode) then
+        return RKelly::Nodes::NumberNode.new(res.left.value + res.value.value)
+      else
+        return res
+      end
+    end
+
     def visit_AddNode(n)
-      raise NotImplementedError, 'AddNode'
+      n = optimize_AddNode(n)
+      if n.instance_of?(RKelly::Nodes::AddNode)
+        visit n.left
+        visit n.value
+        @asm.add
+      else
+        visit n
+      end
     end
 
     def visit_SubtractNode(n)
@@ -237,11 +330,21 @@ module JetSpider
     end
 
     def visit_PrefixNode(n)
-      raise "PrefixNode not implemented"
     end
 
     def visit_PostfixNode(n)
-      raise "PostfixNode not implemented"
+      if n.value == "++"
+        var = n.operand.variable
+        case
+        when var.parameter?
+          @asm.arginc var.index
+        when var.global?
+          @asm.bindgname var.name
+          @asm.gnameinc var.name
+        when var.local?
+          @asm.localinc var.index
+        end
+      end
     end
 
     def visit_BitwiseNotNode(n) raise "BitwiseNotNode not implemented"; end
@@ -317,11 +420,22 @@ module JetSpider
     end
 
     def visit_NumberNode(n)
-      raise NotImplementedError, 'NumberNode'
+      val = n.value
+      if val == 1
+        @asm.one
+      elsif -128 <=  val && val < 2 ** 7
+        @asm.int8 val
+      elsif 0 <= val && val < 2 ** 16
+        @asm.uint16 val
+      elsif 0 <= val && val < 2 ** 24
+        @asm.uint24 val
+      else
+        @asm.int32 val
+      end     
     end
 
     def visit_StringNode(n)
-      raise NotImplementedError, 'StringNode'
+      @asm.string eval(n.value)
     end
 
     def visit_ArrayNode(n) raise "ArrayNode not implemented"; end
