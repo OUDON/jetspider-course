@@ -85,14 +85,20 @@ module JetSpider
     #
 
     def visit_FunctionCallNode(n)
-      @asm.callgname n.value.variable.name
+      if n.value.instance_of?(RKelly::Nodes::DotAccessorNode)
+        accs = n.value.accessor
+        visit n.value
+        @asm.setprop accs
+      else
+        @asm.callgname n.value.variable.name
 
-      args = n.arguments.value
-      args.each do |arg|
-        visit arg
+        args = n.arguments.value
+        args.each do |arg|
+          visit arg
+        end
+
+        @asm.call args.length
       end
-
-      @asm.call args.length
     end
 
     def visit_FunctionDeclNode(n)
@@ -133,7 +139,24 @@ module JetSpider
       end
     end
 
+
+
     def visit_OpEqualNode(n)
+      if n.left.instance_of?(RKelly::Nodes::DotAccessorNode)
+        OpEqualForObject(n)
+      else
+        OpEqualForPrimitive(n)
+      end
+    end
+
+    def OpEqualForObject(n)
+      accs = n.left.accessor
+      visit n.left
+      visit n.value
+      @asm.setprop accs
+    end
+
+    def OpEqualForPrimitive(n)
       var = n.left.variable
       case
       when var.parameter?
@@ -381,11 +404,21 @@ module JetSpider
     #
 
     def visit_NewExprNode(n)
-      raise NotImplementedError, 'NewExprNode'
+      var = n.value.variable
+      case
+      when var.global?
+        @asm.getgname var.name
+        @asm.push
+
+        n.arguments.value.each do |arg|
+          visit arg
+        end
+        @asm.new n.arguments.value.length 
+      end
     end
 
     def visit_DotAccessorNode(n)
-      raise NotImplementedError, 'DotAccessorNode'
+      visit n.value
     end
 
     def visit_BracketAccessorNode(n)
